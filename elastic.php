@@ -22,19 +22,24 @@ class elastic {
 	* @param  string	$index
 	* @return array		
 	*/
-    public function get($id,$key,$index=false) {
+    public function get($id,$key='id',$index=false) {
+    	
+    	
         if($key=='id') {
             $h=  $this->call('_doc/'.$id,0,'GET',$index);
         } else {
-            $a[] = ["term"=>[$key=>$id]];
-            $query['query']['bool']['filter'] = $a;
+        	if(is_numeric($id) || is_bool($id)) {
+        		$query['query'] = ["term"=>[$key=>["value"=>$id]]];
+        	} else {
+        		$query['query'] = ["match"=>[$key=>["query"=>$id]]];
+        	}
             $call= $this->call('_search?size=1',$query,'GET',$index);
             $h= (is_array($call) && $call['hits'] && $call['hits']['hits']) ? $call['hits']['hits'][0] : 0;
         }
-        
+       
         if(!isset($h['_source'])) return ['error'=>'not found'];
         $h['_source']['id'] = $h['_id']; 
-        $h['_source']['_seq_no']= $h['_seq_no'];
+        if(isset($h['_seq_no'])) $h['_source']['_seq_no']= $h['_seq_no'];
         foreach($h['_source'] as $k=>$o) if($o=='0' || $o=='1') $h['_source'][$k] = (float)$o;
         return $h['_source'];
     }
@@ -53,7 +58,7 @@ class elastic {
             $start = $page * $max;
             $path = '_search?size='.$max.'&from='.$start;
             if($type) $query['type']=$type;
-            if($sort=='id') $sort = '_id';
+            //if($sort=='id') $sort = '_id';
             $search = $this->call($path,$this->query($query,$order,$sort,$after));
             $rows = [];
             if(isset($search['error'])) return ['count'=>0,'hits'=>[],'error'=>$search['error']['root_cause']];
@@ -75,9 +80,9 @@ class elastic {
 	* @param  string	$index
 	* @return array		
 	*/
-    public function count($type=0,$query=[],$index=0) {
+    public function count($type=0,$query=[]) {
         if($type) $query['type']=$type;
-        return $this->call('_doc/_count',$this->query($query),'POST',$index);
+        return $this->call('_doc/_count',$this->query($query),'POST');
     }
     /**
 	* Get/Set mapping object of index
@@ -232,9 +237,13 @@ class elastic {
         if(isset($query['aggs_sum'])) $obj['aggs']['result']['sum']['field'] = $query['aggs_sum'];
         if(isset($query['type'])) $obj['query']['bool']['filter']['match']['type'] = $query['type'];
         if(isset($query['query'])) $obj['query']['bool']['must']['query_string'] = $query['query'];
+		if(isset($query['ids'])) {
+			$obj = [];
+			$obj['query']['ids']['values'] = $query['ids'];
+		}
 		if($after) $obj["search_after"] = [$after];
-	
         if($sort) $obj['sort'][$sort] = $order;
+       
         return $obj;
     }
     /**
@@ -394,6 +403,9 @@ class elastic {
         $cmd = 'sudo service elasticsearch restart';
         return shell_exec($cmd);
     }
+    public function alive($url,$post){
+    	return $this->call("");
+    }
     /**
 	* CURL Call
 	* @return array		
@@ -401,10 +413,10 @@ class elastic {
     public function call($path,$query=false,$method='GET',$index=false){
         if($query && $method=='GET') $method = 'POST';
         
-        $ind = ($index || $index=='') ? $index.'/' : $this->index.'/' ;
+        $ind = ($index || $index=='_all') ? $index.'/' : $this->index.'/' ;
         $server = ($ind!='') ? $this->server.'/' : $this->server;
         $ci = curl_init();
-
+		
         curl_setopt($ci, CURLOPT_HTTPHEADER, ['Content-Type:application/json']);
         curl_setopt($ci, CURLOPT_URL, $server . $ind  . $path);
         curl_setopt($ci, CURLOPT_PORT, $this->port);
