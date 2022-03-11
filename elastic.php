@@ -10,6 +10,7 @@ class elastic {
     public $index;
     public $ajax = false;
     public $restarting = false;
+    public $version = 8;
     public function __construct() {
           $this->server = DB_SERVER;
           $this->port = DB_PORT;
@@ -54,7 +55,7 @@ class elastic {
 	* @param  string 	$after
 	* @return array
 	*/
-    public function search($type=false,$query=[],$max=12,$page=0,$order='asc',$sort='_id',$after=false) {
+    public function search($type=false,$query=[],$max=12,$page=0,$order='asc',$sort='id',$after=false) {
             $start = $page * $max;
             $path = '_search?size='.$max.'&from='.$start;
             if($type) $query['type']=$type;
@@ -236,7 +237,8 @@ class elastic {
         if(isset($query['aggs_term']) && $query['aggs_term']) $obj['aggs']['values']['terms']["field"] = $query['aggs_term'];
         if(isset($query['aggs_sum'])) $obj['aggs']['result']['sum']['field'] = $query['aggs_sum'];
         if(isset($query['type'])) $obj['query']['bool']['filter']['match']['type'] = $query['type'];
-        if(isset($query['query'])) $obj['query']['bool']['must']['query_string'] = $query['query'];
+        if(isset($query['query']) && !isset($obj['query']['bool']['must'])) $obj['query']['bool']['must'] = [];
+        if(isset($query['query'])) $obj['query']['bool']['must'][] = ["query_string"=>$query['query']];
 		if(isset($query['ids'])) {
 			$obj = [];
 			$obj['query']['ids']['values'] = $query['ids'];
@@ -272,7 +274,9 @@ class elastic {
     public function update($id,$data,$wait=false){
         $data = ['doc'=>$data];
         $wait = ($wait) ? '?refresh=wait_for' : '';
-        return $this->call('_doc/'.$id.'/_update'.$wait,$data,'POST');
+        return ($this->version>=8) ? 
+        	$this->call('_update/'.$id.$wait,$data,'POST') : 
+        	$this->call('_doc/'.$id.'/_update'.$wait,$data,'POST');
     }
     /**
 	* Bulk Import Data
@@ -293,7 +297,8 @@ class elastic {
             if($type) $a['type'] = $type;
             $index = $a['_index'] ?? $this->index;
 
-            $root = ['_index'=>$index,'_type'=>'_doc'];
+            $root = ['_index'=>$index];
+            if($this->version<8) $root["_type"] = "_doc";
             if(isset($a['id'])) {
 				$root['_id'] = $a['id'];
 				unset($a['id']);
