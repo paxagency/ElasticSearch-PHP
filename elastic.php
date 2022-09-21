@@ -24,10 +24,8 @@ class elastic {
 	* @return array		
 	*/
     public function get($id,$key='id',$index=false) {
-    	
-    	
         if($key=='id') {
-            $h=  $this->call('_doc/'.$id,0,'GET',$index);
+            $h= $this->call('_doc/'.$id,0,'GET',$index);
         } else {
         	if(is_numeric($id) || is_bool($id)) {
         		$query['query'] = ["term"=>[$key=>["value"=>$id]]];
@@ -60,6 +58,7 @@ class elastic {
             $path = '_search?size='.$max.'&from='.$start;
             if($type) $query['type']=$type;
             //if($sort=='id') $sort = '_id';
+           
             $search = $this->call($path,$this->query($query,$order,$sort,$after));
             $rows = [];
             if(isset($search['error'])) return ['count'=>0,'hits'=>[],'error'=>$search['error']['root_cause']];
@@ -67,11 +66,13 @@ class elastic {
                 $h['_source']['id'] = $h['_id']; 
                 $rows[] = $h['_source'];
             }
-            $count = $search['hits']['total']['value'];
+            $count = (isset($search['hits'])) ? $search['hits']['total']['value'] : 1;
+            
             if($count==10000) {
             	$c = $this->count($type);
             	$count = $c["count"];
             } 
+            
             return ['count'=>$count,'hits'=>$rows];
     }
     /**
@@ -83,7 +84,10 @@ class elastic {
 	*/
     public function count($type=0,$query=[]) {
         if($type) $query['type']=$type;
-        return $this->call('_doc/_count',$this->query($query),'POST');
+       return ($this->version>=8) ? 
+        	$this->call('_count',$this->query($query),'POST') : 
+        	$this->call('_doc/_count',$this->query($query),'POST');
+
     }
     /**
 	* Get/Set mapping object of index
@@ -112,8 +116,10 @@ class elastic {
         ]]];
         $settings = ($settings) ? $settings : ["index"=> ["number_of_shards"=>1,"number_of_replicas"=>1],"analysis" => $normalizer];
         //Loop through map and set all keyword fields to include this normalizer
-        foreach($map as $k=>$m) if(isset($m['type']) && $m['type']=='keyword') $map[$k]['normalizer'] = 'my_normalizer';
-        
+        foreach($map as $k=>$m) {
+        	if(isset($m['type']) && $m['type']=='keyword') $map[$k]['normalizer'] = 'my_normalizer';
+        	if(isset($m['properties'])) foreach($m['properties'] as $ke=>$ma) if(isset($ma['type']) && $ma['type']=='keyword') $map[$k]['properties'][$ke]['normalizer'] = 'my_normalizer';
+        }
         //Create a template so that dynamic fields being generated are keyword type by default
         $temp = [["strings"=>["match_mapping_type"=>"string","mapping"=>["type"=>"keyword","normalizer"=>"my_normalizer"]]]];
         $object = ["settings"=>$settings,"mappings"=>["properties"=>$map,"dynamic_templates"=>$temp]];
@@ -166,47 +172,50 @@ class elastic {
         if(!isset($qu['and']) && !isset($qu['or']) && !isset($qu['query']))  return $qu;
        
         $query = [];
+       
         foreach($qu as $key=>$que) {
-            if($key!='and' && $key!='or')  break;
-            if($key=='and') $key='must';
-            if($key=='or') $key='should';
-            foreach($que as $q) {
-                switch($q[1]){
-                    case "=":
-                        $query[$key][] = ["match_phrase"=>[$q[0]=>$q[2]]];
-                    break;
-                    case "!=":
-                        $query[$key][] = ['bool'=>['must_not'=>["match_phrase"=>[$q[0]=>$q[2]]]]]; 
-                    break;
-                    case ">":
-                        $query[$key][] = ["range"=>[$q[0]=>['gt'=>$q[2]]]];
-                    break;
-                    case "<":
-                        $query[$key][] = ["range"=>[$q[0]=>['lt'=>$q[2]]]];
-                    break;
-                    case ">=":
-                        $query[$key][] = ["range"=>[$q[0]=>['gte'=>$q[2]]]];
-                    break;
-                    case "<=":
-                        $query[$key][] = ["range"=>[$q[0]=>['lte'=>$q[2]]]];
-                    break;
-                    case "exists":
-                        $query[$key][] = ["exists"=>['field'=>$q[0]]];
-                    break;
-                    case "empty":
-                        $query[$key][] = ['bool'=>['must_not'=>["exists"=>['field'=>$q[0]]]]]; 
-                    break;
-                    case "contains":
-                        $query[$key][] = ["query_string"=>['query'=>'*'.$q[2].'*','fields'=>[$q[0]]]];
-                    break;
-                    case "contains_not": 
-                        $query[$key][] = ['bool'=>['must_not'=>["query_string"=>['query'=>'*'.$q[2].'*','fields'=>[$q[0]]]]]];
-                    break;
-                    case "*":
-                        $query[$key][] = ["wildcard"=>[$q[0]=>['value'=>$q[2]]]];
-                    break;
+        	
+            if($key=='and' || $key=='or') {
+				if($key=='and') $key='must';
+				if($key=='or') $key='should';
+				foreach($que as $q) {
+					switch($q[1]){
+						case "=":
+							$query[$key][] = ["match_phrase"=>[$q[0]=>$q[2]]];
+						break;
+						case "!=":
+							$query[$key][] = ['bool'=>['must_not'=>["match_phrase"=>[$q[0]=>$q[2]]]]]; 
+						break;
+						case ">":
+							$query[$key][] = ["range"=>[$q[0]=>['gt'=>$q[2]]]];
+						break;
+						case "<":
+							$query[$key][] = ["range"=>[$q[0]=>['lt'=>$q[2]]]];
+						break;
+						case ">=":
+							$query[$key][] = ["range"=>[$q[0]=>['gte'=>$q[2]]]];
+						break;
+						case "<=":
+							$query[$key][] = ["range"=>[$q[0]=>['lte'=>$q[2]]]];
+						break;
+						case "exists":
+							$query[$key][] = ["exists"=>['field'=>$q[0]]];
+						break;
+						case "empty":
+							$query[$key][] = ['bool'=>['must_not'=>["exists"=>['field'=>$q[0]]]]]; 
+						break;
+						case "contains":
+							$query[$key][] = ["query_string"=>['query'=>'*'.$q[2].'*','fields'=>[$q[0]]]];
+						break;
+						case "contains_not": 
+							$query[$key][] = ['bool'=>['must_not'=>["query_string"=>['query'=>'*'.$q[2].'*','fields'=>[$q[0]]]]]];
+						break;
+						case "*":
+							$query[$key][] = ["wildcard"=>[$q[0]=>['value'=>$q[2]]]];
+						break;
 
-                }
+					}
+				}
             }
         }
       
@@ -257,7 +266,7 @@ class elastic {
 	* @param  boolean 	$wait
 	* @return array		
 	*/
-    public function save($type,$data,$id=false,$wait=false){
+    public function save($type,$data,$id=false,$wait=true){
         $id = ($id) ? $id : '';
         $wait = ($wait) ? '_doc/'.$id.'?refresh=wait_for' : '_doc/';
         $data['type'] = $type;
@@ -348,7 +357,7 @@ class elastic {
 	* @param  boolean 	$wait
 	* @return array		
 	*/
-    public function delete($id,$wait=false){
+    public function delete($id,$wait=true){
         $wait = ($wait) ? '?refresh=wait_for' : '';
         return $this->call('_doc/'.$id.$wait,0,'DELETE');
     }
